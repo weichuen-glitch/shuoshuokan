@@ -1,5 +1,5 @@
 // Decrypts the locked game files on this phone. Nothing readable is stored on the server.
-const VER = '20261031022743';
+const VER = '20261031094651';
 const CACHE = 'enc-' + VER;
 const BASE = new URL('./', self.registration.scope).pathname;
 const APP = BASE + 'app/';
