@@ -48,7 +48,7 @@
   </form>
 </div>
 <script>
-const SALT = '6M0+6GT4rWOPi0kdygHBrQ==';
+const SALT = 'dI4UuozmqVNogG0oyutBAg==';
 const ITER = 600000;
 const $ = (id) => document.getElementById(id);
 function b64(s) { return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); }
@@ -81,9 +81,21 @@ async function check(k) {
   try { await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(buf, 0, 12) }, k.aes, new Uint8Array(buf, 12)); return true; }
   catch (_) { return false; }
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function enter() {
-  await navigator.serviceWorker.ready;
-  const sw = navigator.serviceWorker.controller || (await navigator.serviceWorker.getRegistration()).active;
+  const reg = await navigator.serviceWorker.ready;
+  // pick up a newer version of the game before opening it
+  try { await Promise.race([reg.update(), sleep(4000)]); } catch (_) {}
+  const w = reg.installing || reg.waiting;
+  if (w) {
+    $('wait').innerHTML = '<p>更新中…</p>'; $('wait').classList.remove('hide'); $('form').classList.add('hide');
+    await new Promise((res) => {
+      if (w.state === 'activated' || w.state === 'redundant') return res();
+      w.addEventListener('statechange', () => { if (w.state === 'activated' || w.state === 'redundant') res(); });
+      setTimeout(res, 10000);
+    });
+  }
+  const sw = navigator.serviceWorker.controller || reg.active;
   if (sw) sw.postMessage('reset');
   location.replace('app/index.html');
 }

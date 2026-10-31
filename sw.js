@@ -1,6 +1,21 @@
 // Decrypts the locked game files on this phone. Nothing readable is stored on the server.
-const VER = '20261031094651';
-const CACHE = 'enc-' + VER;
+const VER = '20261031095048';
+const CACHE = 'enc';   // kept across updates; each file is keyed by its own version
+let vers = null, versAt = 0;
+async function getVers(force) {
+  if (vers && !force && Date.now() - versAt < 60000) return vers;
+  try {
+    const r = await fetch(new URL('d/v.json', self.registration.scope).pathname + '?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) { vers = await r.json(); versAt = Date.now(); }
+  } catch (_) {}
+  return vers || {};
+}
+async function pruneCache() {
+  const v = await getVers(true); if (!v || !Object.keys(v).length) return;
+  const keep = new Set(Object.entries(v).map(([n, h]) => 'd/' + n + '.bin?h=' + h));
+  const c = await caches.open(CACHE);
+  for (const req of await c.keys()) { const u = new URL(req.url); const k = u.pathname.split('/').slice(-2).join('/') + u.search; if (!keep.has(k)) await c.delete(req); }
+}
 const BASE = new URL('./', self.registration.scope).pathname;
 const APP = BASE + 'app/';
 const TYPES = { html: 'text/html; charset=utf-8', mp3: 'audio/mpeg', png: 'image/png', json: 'application/json', webmanifest: 'application/manifest+json', js: 'text/javascript', css: 'text/css', svg: 'image/svg+xml' };
@@ -31,6 +46,7 @@ self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
   for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
   await self.clients.claim();
+  pruneCache();
 })()));
 self.addEventListener('message', (e) => { if (e.data === 'reset') keys = null; });
 
@@ -47,9 +63,11 @@ async function serve(req, path) {
   if (!k) return req.mode === 'navigate' ? Response.redirect(BASE, 302) : new Response('', { status: 401 });
   const sig = new Uint8Array(await crypto.subtle.sign('HMAC', k.mac, new TextEncoder().encode(path)));
   const name = Array.from(sig.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
-  const url = BASE + 'd/' + name + '.bin';
+  const v = await getVers(req.mode === 'navigate');
+  const url = BASE + 'd/' + name + '.bin?h=' + (v[name] || 'x' + Date.now());
   const cache = await caches.open(CACHE);
   let r = await cache.match(url);
+  if (!r && !v[name]) r = await cache.match(BASE + 'd/' + name + '.bin', { ignoreSearch: true });   // offline: use what we have
   if (!r) {
     try { r = await fetch(url); } catch (_) { return new Response('', { status: 503 }); }
     if (!r.ok) return new Response('', { status: 404 });
