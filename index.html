@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>说说看</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#7ccbff">
+<style>
+  :root { --bg:#7ccbff; --card:#ffffff; --ink:#1d3557; --accent:#ff7a59; --muted:#4a5d78; --err:#c0392b; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body { background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .card { background:var(--card); border-radius:24px; padding:28px 24px; width:100%; max-width:380px; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.12); }
+  img { width:96px; height:96px; border-radius:50%; }
+  h1 { font-size:26px; margin:10px 0 4px; }
+  p { margin:0 0 18px; color:var(--muted); font-size:16px; }
+  input { width:100%; font-size:20px; padding:14px 16px; border:2px solid #cfe6fb; border-radius:14px; outline:none; color:var(--ink); }
+  input:focus { border-color:var(--accent); }
+  button { margin-top:14px; width:100%; font-size:22px; font-weight:700; padding:14px; border:0; border-radius:14px; background:var(--accent); color:#fff; }
+  button:disabled { opacity:.6; }
+  .msg { min-height:24px; margin-top:12px; font-size:16px; color:var(--err); }
+  .hide { display:none; }
+  @media (max-height:520px) {
+    body { align-items:flex-start; overflow:auto; }
+    .card { padding:14px 20px; }
+    img { width:56px; height:56px; }
+    h1 { font-size:20px; margin:4px 0 2px; }
+    p { margin-bottom:10px; font-size:14px; }
+    input { padding:10px 14px; font-size:18px; }
+    button { margin-top:10px; padding:10px; font-size:20px; }
+    .msg { margin-top:6px; min-height:18px; }
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <img src="icon-192.png" alt="">
+  <h1>说说看</h1>
+  <div id="wait"><p>打开中…</p></div>
+  <form id="form" class="hide" autocomplete="on">
+    <p>第一次打开要输入密码,之后会记住。</p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="密码" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button id="go" type="submit">进入</button>
+    <div class="msg" id="msg"></div>
+  </form>
+</div>
+<script>
+const SALT = 'dI4UuozmqVNogG0oyutBAg==';
+const ITER = 600000;
+const $ = (id) => document.getElementById(id);
+function b64(s) { return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); }
+function openDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('ssk', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('k');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function dbGet() {
+  const db = await openDb();
+  return new Promise((res) => { const q = db.transaction('k').objectStore('k').get('keys'); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); });
+}
+async function dbPut(v) {
+  const db = await openDb();
+  return new Promise((res, rej) => { const t = db.transaction('k', 'readwrite'); t.objectStore('k').put(v, 'keys'); t.oncomplete = res; t.onerror = () => rej(t.error); });
+}
+async function derive(pw) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: b64(SALT), iterations: ITER, hash: 'SHA-256' }, base, 512));
+  const aes = await crypto.subtle.importKey('raw', bits.slice(0, 32), { name: 'AES-GCM' }, false, ['decrypt']);
+  const mac = await crypto.subtle.importKey('raw', bits.slice(32), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return { aes, mac };
+}
+async function check(k) {
+  const r = await fetch('d/check.bin', { cache: 'no-store' });
+  const buf = await r.arrayBuffer();
+  try { await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(buf, 0, 12) }, k.aes, new Uint8Array(buf, 12)); return true; }
+  catch (_) { return false; }
+}
+async function enter() {
+  await navigator.serviceWorker.ready;
+  const sw = navigator.serviceWorker.controller || (await navigator.serviceWorker.getRegistration()).active;
+  if (sw) sw.postMessage('reset');
+  location.replace('app/index.html');
+}
+(async () => {
+  if (!('serviceWorker' in navigator) || !window.crypto || !crypto.subtle) {
+    $('wait').innerHTML = '<p>这个浏览器打不开,请用手机 Chrome。</p>'; return;
+  }
+  navigator.serviceWorker.register('sw.js', { scope: './' });
+  let k = null;
+  try { k = await dbGet(); } catch (_) {}
+  if (k) { enter(); return; }
+  $('wait').classList.add('hide');
+  $('form').classList.remove('hide');
+  $('pw').focus();
+})();
+$('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw = $('pw').value.trim();
+  if (!pw) return;
+  $('go').disabled = true; $('msg').textContent = ''; $('go').textContent = '检查中…';
+  try {
+    const k = await derive(pw);
+    if (!(await check(k))) { $('msg').textContent = '密码不对,再试一次。'; return; }
+    await dbPut(k);
+    $('go').textContent = '打开游戏…';
+    await enter();
+  } catch (err) {
+    $('msg').textContent = '打不开:' + (err && err.message ? err.message : err);
+  } finally {
+    $('go').disabled = false; if ($('go').textContent === '检查中…') $('go').textContent = '进入';
+  }
+});
+</script>
+</body>
+</html>
